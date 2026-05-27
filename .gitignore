@@ -6,3 +6,16 @@ npm-debug.log*
 database/seed/*.csv
 .codex-logs/
 .DS_Store
+
+# compiled ts artifacts (tsc --build with composite: true)
+apps/web/src/**/*.js
+apps/web/src/**/*.d.ts
+apps/web/*.js
+apps/web/*.d.ts
+apps/web/tsconfig.tsbuildinfo
+apps/api/src/**/*.js
+apps/api/src/**/*.d.ts
+apps/api/dist/
+packages/shared/src/**/*.js
+packages/shared/src/**/*.d.ts
+*.tsbuildinfo

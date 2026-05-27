@@ -48,6 +48,28 @@ familiesRouter.get(
   })
 );
 
+familiesRouter.get(
+  "/:familyId/stats",
+  asyncHandler(async (req, res) => {
+    const familyId = Number(req.params.familyId);
+    await assertFamilyAccess(req.user!.userId, familyId);
+
+    const result = await query(
+      `
+      SELECT
+        COUNT(*)::INT AS total,
+        COUNT(CASE WHEN gender = 'M' THEN 1 END)::INT AS male,
+        COUNT(CASE WHEN gender = 'F' THEN 1 END)::INT AS female
+      FROM members
+      WHERE family_id = $1
+      `,
+      [familyId]
+    );
+
+    res.json({ data: result.rows[0] });
+  })
+);
+
 familiesRouter.post(
   "/",
   asyncHandler(async (req, res) => {

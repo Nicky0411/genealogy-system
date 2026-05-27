@@ -91,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_invitations_invitee_status ON invitations(invitee
 CREATE INDEX IF NOT EXISTS idx_members_family_id ON members(family_id);
 CREATE INDEX IF NOT EXISTS idx_members_father_id ON members(father_id);
 CREATE INDEX IF NOT EXISTS idx_members_mother_id ON members(mother_id);
+CREATE INDEX IF NOT EXISTS idx_members_spouse_id ON members(spouse_id);
 CREATE INDEX IF NOT EXISTS idx_members_family_generation ON members(family_id, generation);
 CREATE INDEX IF NOT EXISTS idx_members_lower_name ON members(LOWER(name));
 CREATE INDEX IF NOT EXISTS idx_members_name_trgm ON members USING GIN (name gin_trgm_ops);

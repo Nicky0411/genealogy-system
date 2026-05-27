@@ -37,6 +37,17 @@ membersRouter.get(
 
     await assertFamilyAccess(req.user!.userId, familyId);
 
+    const countResult = await query<{ total: string }>(
+      `
+      SELECT COUNT(*) AS total
+      FROM members
+      WHERE family_id = $1
+        AND ($2 = '' OR name ILIKE '%' || $2 || '%')
+        AND ($3::INT IS NULL OR generation = $3)
+      `,
+      [familyId, keyword, generation]
+    );
+
     const result = await query<MemberRow>(
       `
       SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id, birthplace, biography
@@ -50,7 +61,7 @@ membersRouter.get(
       [familyId, keyword, generation, limit, offset]
     );
 
-    res.json({ data: result.rows.map(toMember) });
+    res.json({ data: result.rows.map(toMember), total: Number(countResult.rows[0].total) });
   })
 );
 
@@ -96,6 +107,34 @@ membersRouter.post(
     } finally {
       client.release();
     }
+  })
+);
+
+membersRouter.get(
+  "/:memberId/children",
+  asyncHandler(async (req, res) => {
+    const memberId = Number(req.params.memberId);
+
+    const parent = await query<MemberRow>(
+      `SELECT member_id, family_id FROM members WHERE member_id = $1`,
+      [memberId]
+    );
+    if (!parent.rows[0]) {
+      throw httpError(404, "Member not found");
+    }
+    await assertFamilyAccess(req.user!.userId, Number(parent.rows[0].family_id));
+
+    const result = await query<MemberRow>(
+      `
+      SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id, birthplace, biography
+      FROM members
+      WHERE father_id = $1 OR mother_id = $1
+      ORDER BY gender, birth_year NULLS LAST, member_id
+      `,
+      [memberId]
+    );
+
+    res.json({ data: result.rows.map(toMember) });
   })
 );
 

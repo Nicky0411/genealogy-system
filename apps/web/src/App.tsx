@@ -139,6 +139,76 @@ function formatDate(value?: string | null) {
   });
 }
 
+function Pagination({
+  page,
+  totalPages,
+  onPageChange
+}: {
+  page: number;
+  totalPages: number;
+  onPageChange: (p: number) => void;
+}) {
+  const [jumpValue, setJumpValue] = useState("");
+
+  const pages = useMemo(() => {
+    const result: (number | "ellipsis")[] = [];
+    const range = 2;
+    for (let i = 1; i <= totalPages; i++) {
+      if (i === 1 || i === totalPages || (i >= page - range && i <= page + range)) {
+        result.push(i);
+      } else if (result[result.length - 1] !== "ellipsis") {
+        result.push("ellipsis");
+      }
+    }
+    return result;
+  }, [page, totalPages]);
+
+  function handleJump() {
+    const target = parseInt(jumpValue, 10);
+    if (target >= 1 && target <= totalPages) {
+      onPageChange(target);
+      setJumpValue("");
+    }
+  }
+
+  return (
+    <div className="pagination">
+      <button className="ghost-button page-btn" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+        上一页
+      </button>
+      {pages.map((item, i) =>
+        item === "ellipsis" ? (
+          <span className="page-ellipsis" key={`e${i}`}>…</span>
+        ) : (
+          <button
+            className={`page-num ${item === page ? "active" : ""}`}
+            key={item}
+            onClick={() => onPageChange(item)}
+          >
+            {item}
+          </button>
+        )
+      )}
+      <button className="ghost-button page-btn" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+        下一页
+      </button>
+      <span className="page-jump">
+        跳至
+        <input
+          type="number"
+          min={1}
+          max={totalPages}
+          value={jumpValue}
+          onChange={(e) => setJumpValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleJump(); }}
+          placeholder={`${totalPages}`}
+        />
+        页
+      </span>
+    </div>
+  );
+}
+
 export function App() {
   const [token, setToken] = useState(() => localStorage.getItem("genealogy-token") ?? "");
   const [user, setUser] = useState<AuthUser | null>(() => {
@@ -430,6 +500,107 @@ function AppFrame({
   );
 }
 
+interface TreeNodeData {
+  member: Member | null;
+  father: TreeNodeData | null;
+  mother: TreeNodeData | null;
+}
+
+function PedigreeChart({
+  data,
+  rootId
+}: {
+  data: (Member & { depth?: number })[];
+  rootId: number;
+}) {
+  const memberMap = useMemo(() => {
+    const map = new Map<number, Member>();
+    for (const m of data) map.set(m.memberId, m);
+    return map;
+  }, [data]);
+
+  const { levels } = useMemo(() => {
+    function build(memberId: number | null, remainDepth: number): TreeNodeData {
+      const m = memberId ? memberMap.get(memberId) ?? null : null;
+      if (!m || remainDepth <= 0) {
+        return { member: m, father: null, mother: null };
+      }
+      return {
+        member: m,
+        father: build(m.fatherId ?? null, remainDepth - 1),
+        mother: build(m.motherId ?? null, remainDepth - 1)
+      };
+    }
+
+    const root = build(rootId, 3);
+
+    const result: (TreeNodeData | null)[][] = [];
+    function collect(node: TreeNodeData | null, depth: number) {
+      if (depth >= result.length) result.push([]);
+      result[depth].push(node);
+      if (depth < 3) {
+        collect(node?.father ?? null, depth + 1);
+        collect(node?.mother ?? null, depth + 1);
+      }
+    }
+    collect(root, 0);
+
+    return { levels: result.reverse() };
+  }, [memberMap, rootId]);
+
+  if (levels.length === 0) return null;
+
+  const labelFor = (depth: number, m: Member | null) => {
+    if (!m) return null;
+    if (depth === 0) return "本人";
+    if (depth === 1) return m.gender === "M" ? "父" : "母";
+    if (depth === 2) return m.gender === "M" ? "祖父" : "祖母";
+    return m.gender === "M" ? "曾祖" : "曾祖母";
+  };
+
+  return (
+    <div className="pedigree-tree">
+      {levels.map((nodes, levelIndex) => { const actualDepth = levels.length - 1 - levelIndex; return (
+        <div key={levelIndex}>
+          {levelIndex > 0 && (
+            <div
+              className="tree-connectors"
+              style={{ gridTemplateColumns: `repeat(${levels[levelIndex - 1].length}, minmax(0, 1fr))` }}
+            >
+              {levels[levelIndex - 1].map((_, ni) => (
+                <div className="tree-connector-cell" key={ni} />
+              ))}
+            </div>
+          )}
+          <div
+            className="tree-level"
+            style={{ gridTemplateColumns: `repeat(${nodes.length}, minmax(0, 1fr))` }}
+          >
+            {nodes.map((node, ni) => (
+              <div className="tree-cell" key={ni}>
+                {node?.member ? (
+                  <div className={`tree-card ${actualDepth === 0 ? "tree-card-self" : ""}`}>
+                    <span className="tree-card-label">{labelFor(actualDepth, node.member)}</span>
+                    <span className="tree-card-name">{node.member.name}</span>
+                    <span className="tree-card-meta">
+                      {node.member.gender === "M" ? "男" : "女"}
+                      {node.member.birthYear != null || node.member.deathYear != null
+                        ? ` · ${node.member.birthYear ?? "?"} — ${node.member.deathYear ?? "?"}`
+                        : ""}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="tree-card tree-card-empty">—</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        ); })}
+    </div>
+  );
+}
+
 function FamiliesPage({
   token,
   refreshKey,
@@ -448,6 +619,21 @@ function FamiliesPage({
   const [inviteMessage, setInviteMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // ancestor query
+  const [ancestorModalOpen, setAncestorModalOpen] = useState(false);
+  const [ancestorMemberId, setAncestorMemberId] = useState("");
+  const [ancestorResults, setAncestorResults] = useState<(Member & { depth?: number })[]>([]);
+  const [ancestorLoading, setAncestorLoading] = useState(false);
+  const [ancestorError, setAncestorError] = useState("");
+
+  // path query
+  const [pathModalOpen, setPathModalOpen] = useState(false);
+  const [pathStartId, setPathStartId] = useState("");
+  const [pathTargetId, setPathTargetId] = useState("");
+  const [pathResult, setPathResult] = useState<{ depth: number; path: Member[] } | null>(null);
+  const [pathLoading, setPathLoading] = useState(false);
+  const [pathError, setPathError] = useState("");
 
   async function loadFamilies() {
     setLoading(true);
@@ -554,6 +740,58 @@ function FamiliesPage({
     setFamilyModalOpen(false);
   }
 
+  async function queryAncestors(event: FormEvent) {
+    event.preventDefault();
+    setAncestorError("");
+    setAncestorResults([]);
+    setAncestorLoading(true);
+    try {
+      const mid = Number(ancestorMemberId);
+      const [memberRes, ancestorRes] = await Promise.all([
+        apiRequest<{ data: Member }>(`/members/${mid}`, { token }),
+        apiRequest<{ data: (Member & { depth?: number })[] }>(
+          `/genealogy/members/${mid}/ancestors?maxDepth=3`,
+          { token }
+        )
+      ]);
+      setAncestorResults([memberRes.data, ...ancestorRes.data]);
+      if (ancestorRes.data.length === 0) setAncestorError("未查询到祖先数据（可能此人没有录入父辈信息）");
+    } catch (err) {
+      setAncestorError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setAncestorLoading(false);
+    }
+  }
+
+  function getKinship(a: Member, b: Member): string {
+    if (b.memberId === a.fatherId) return "父";
+    if (b.memberId === a.motherId) return "母";
+    if (a.memberId === b.fatherId) return b.gender === "M" ? "子" : "女";
+    if (a.memberId === b.motherId) return b.gender === "M" ? "子" : "女";
+    return "亲属";
+  }
+
+  async function queryPath(event: FormEvent) {
+    event.preventDefault();
+    setPathError("");
+    setPathResult(null);
+    setPathLoading(true);
+    try {
+      const start = Number(pathStartId);
+      const target = Number(pathTargetId);
+      const result = await apiRequest<{ data: { depth: number; path: Member[] } | null }>(
+        `/genealogy/members/${start}/path?targetId=${target}`,
+        { token }
+      );
+      setPathResult(result.data);
+      if (!result.data) setPathError("未找到两人之间的亲缘路径");
+    } catch (err) {
+      setPathError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setPathLoading(false);
+    }
+  }
+
   const totalMembers = useMemo(() => families.reduce((sum, family) => sum + family.memberCount, 0), [families]);
 
   return (
@@ -565,78 +803,91 @@ function FamiliesPage({
         </div>
       </header>
 
-      <section className="stats-grid" aria-label="族谱概览">
-        <article className="metric">
-          <span>族谱数量</span>
-          <strong>{families.length}</strong>
-        </article>
-        <article className="metric">
-          <span>成员总数</span>
-          <strong>{totalMembers.toLocaleString()}</strong>
-        </article>
-        <article className="metric">
-          <span>最大族谱</span>
-          <strong>{Math.max(0, ...families.map((family) => family.memberCount)).toLocaleString()}</strong>
-        </article>
-      </section>
+      <div className="query-tools">
+        <button className="ghost-button" type="button" onClick={() => { setAncestorError(""); setAncestorResults([]); setAncestorMemberId(""); setAncestorModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="21" x2="21" y2="3"/><path d="M9 3H21V15"/></svg>
+          <span>祖先查询</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setPathError(""); setPathResult(null); setPathStartId(""); setPathTargetId(""); setPathModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="17" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="10" r="2"/><circle cx="6" cy="10" r="2"/><line x1="6" y1="10" x2="12" y2="6"/><line x1="12" y1="6" x2="18" y2="10"/><line x1="18" y1="10" x2="12" y2="17"/><line x1="12" y1="17" x2="6" y2="10"/></svg>
+          <span>亲缘关系查询</span>
+        </button>
+      </div>
 
-      <section className="home-family-section">
-        <section className="panel list-panel">
-          <div className="panel-heading">
-            <h2>全部族谱</h2>
-            <div className="panel-actions">
-              <button className="primary-button" type="button" onClick={startCreate}>
-                <Plus size={16} />
-                <span>创建族谱</span>
-              </button>
-              <button className="ghost-button" type="button" onClick={() => void loadFamilies()}>
-                <Search size={16} />
-                <span>刷新</span>
-              </button>
+      <div className="home-layout">
+        <section className="home-family-section">
+          <section className="panel list-panel">
+            <div className="panel-heading">
+              <h2>全部族谱</h2>
+              <div className="panel-actions">
+                <button className="primary-button" type="button" onClick={startCreate}>
+                  <Plus size={16} />
+                  <span>创建族谱</span>
+                </button>
+                <button className="ghost-button" type="button" onClick={() => void loadFamilies()}>
+                  <Search size={16} />
+                  <span>刷新</span>
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div className="family-list">
-            {loading ? (
-              <div className="empty-state">加载中</div>
-            ) : (
-              families.map((family) => (
-                <article
-                  className="family-row"
-                  role="button"
-                  tabIndex={0}
-                  key={family.familyId}
-                  onClick={() => onOpenFamily(family)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") onOpenFamily(family);
-                  }}
-                >
-                  <span className="family-mark">{family.surname}</span>
-                  <span className="family-main">
-                    <strong>{family.familyName}</strong>
-                    <span>{family.description}</span>
-                    <span>
-                      最新修改 {formatDate(family.revisionTime)} · 创建用户 {family.createdByUsername}
+            <div className="family-list">
+              {loading ? (
+                <div className="empty-state">加载中</div>
+              ) : (
+                families.map((family) => (
+                  <article
+                    className="family-row"
+                    role="button"
+                    tabIndex={0}
+                    key={family.familyId}
+                    onClick={() => onOpenFamily(family)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") onOpenFamily(family);
+                    }}
+                  >
+                    <span className="family-mark">{family.surname}</span>
+                    <span className="family-main">
+                      <strong>{family.familyName}</strong>
+                      <span>{family.description}</span>
+                      <span>
+                        最新修改 {formatDate(family.revisionTime)} · 创建用户 {family.createdByUsername}
+                      </span>
                     </span>
-                  </span>
-                  <span className="family-count">{family.memberCount.toLocaleString()} 人</span>
-                  <span className="row-actions">
-                    <button className="icon-button" type="button" title="编辑" onClick={(event) => startEdit(event, family)}>
-                      <Edit3 size={16} />
-                    </button>
-                    <button className="icon-button" type="button" title="邀请用户" onClick={(event) => startInvite(event, family)}>
-                      <UserPlus size={16} />
-                    </button>
-                    <button className="icon-button" type="button" title="删除" onClick={(event) => void removeFamily(event, family)}>
-                      <Trash2 size={16} />
-                    </button>
-                  </span>
-                </article>
-              ))
-            )}
-          </div>
+                    <span className="family-count">{family.memberCount.toLocaleString()} 人</span>
+                    <span className="row-actions">
+                      <button className="icon-button" type="button" title="编辑" onClick={(event) => startEdit(event, family)}>
+                        <Edit3 size={16} />
+                      </button>
+                      <button className="icon-button" type="button" title="邀请用户" onClick={(event) => startInvite(event, family)}>
+                        <UserPlus size={16} />
+                      </button>
+                      <button className="icon-button" type="button" title="删除" onClick={(event) => void removeFamily(event, family)}>
+                        <Trash2 size={16} />
+                      </button>
+                    </span>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
         </section>
-      </section>
+
+        <aside className="stats-sidebar" aria-label="族谱概览">
+          <article className="metric">
+            <span>族谱数量</span>
+            <strong>{families.length}</strong>
+          </article>
+          <article className="metric">
+            <span>成员总数</span>
+            <strong>{totalMembers.toLocaleString()}</strong>
+          </article>
+          <article className="metric">
+            <span>最大族谱</span>
+            <strong>{Math.max(0, ...families.map((family) => family.memberCount)).toLocaleString()}</strong>
+          </article>
+        </aside>
+      </div>
 
       {familyModalOpen && (
         <div className="modal-backdrop" onMouseDown={cancelEdit}>
@@ -703,6 +954,230 @@ function FamiliesPage({
           </form>
         </div>
       )}
+
+      {ancestorModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setAncestorModalOpen(false)}>
+          <div className="modal-panel modal-wide modal-pedigree" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>祖先查询（向上3代）</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setAncestorModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryAncestors}>
+                <label>
+                  <span>人物 ID</span>
+                  <input
+                    required
+                    inputMode="numeric"
+                    value={ancestorMemberId}
+                    onChange={(e) => setAncestorMemberId(e.target.value)}
+                    placeholder="输入成员 ID"
+                  />
+                </label>
+                <button className="primary-button wide-button" type="submit" disabled={ancestorLoading}>
+                  <Search size={18} />
+                  <span>{ancestorLoading ? "查询中" : "查询祖先"}</span>
+                </button>
+              </form>
+              {ancestorError && <p className="error-text">{ancestorError}</p>}
+              {ancestorResults.length > 0 && (
+                <div className="query-results">
+                  <PedigreeChart data={ancestorResults} rootId={Number(ancestorMemberId)} />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pathModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setPathModalOpen(false)}>
+          <div className="modal-panel modal-wide" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>亲缘关系查询</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setPathModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryPath}>
+                <div className="form-pair">
+                  <label>
+                    <span>人物 ID (起点)</span>
+                    <input
+                      required
+                      inputMode="numeric"
+                      value={pathStartId}
+                      onChange={(e) => setPathStartId(e.target.value)}
+                      placeholder="输入成员 ID"
+                    />
+                  </label>
+                  <label>
+                    <span>人物 ID (终点)</span>
+                    <input
+                      required
+                      inputMode="numeric"
+                      value={pathTargetId}
+                      onChange={(e) => setPathTargetId(e.target.value)}
+                      placeholder="输入成员 ID"
+                    />
+                  </label>
+                </div>
+                <button className="primary-button wide-button" type="submit" disabled={pathLoading}>
+                  <Search size={18} />
+                  <span>{pathLoading ? "查询中" : "查询路径"}</span>
+                </button>
+              </form>
+              {pathError && <p className="error-text">{pathError}</p>}
+              {pathResult && (
+                <div className="query-results">
+                  <p className="path-summary">
+                    亲缘距离 <strong>{pathResult.depth}</strong> 步
+                  </p>
+                  <div className="path-chain">
+                    {pathResult.path.map((m, i) => (
+                      <div key={m.memberId} className="path-node-wrapper">
+                        <div className="path-node">
+                          <span className="path-node-name">{m.name}</span>
+                          <span className="path-node-meta">
+                            ID {m.memberId} · {m.gender === "M" ? "男" : "女"} · 第{m.generation}代
+                            {m.birthYear != null || m.deathYear != null
+                              ? ` · ${m.birthYear ?? "?"} — ${m.deathYear ?? "?"}`
+                              : ""}
+                          </span>
+                        </div>
+                        {i < pathResult.path.length - 1 && (
+                          <div className="path-arrow">
+                            <span className="path-kinship">{getKinship(m, pathResult.path[i + 1])}</span>
+                            <svg width="14" height="18" viewBox="0 0 14 18" fill="none" stroke="#999" strokeWidth="2">
+                              <line x1="7" y1="0" x2="7" y2="14" />
+                              <polyline points="2,10 7,16 12,10" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TreeView({
+  root,
+  token,
+  onBack,
+  onReroot,
+  onSelectFamily
+}: {
+  root: Member;
+  token: string;
+  onBack: () => void;
+  onReroot: (member: Member) => void;
+  onSelectFamily: (family: Family) => void;
+}) {
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [childrenMap, setChildrenMap] = useState<Map<number, Member[]>>(new Map());
+  const [loadingIds, setLoadingIds] = useState<Set<number>>(new Set());
+
+  async function toggleExpand(member: Member) {
+    if (expandedIds.has(member.memberId)) {
+      const next = new Set(expandedIds);
+      next.delete(member.memberId);
+      setExpandedIds(next);
+      return;
+    }
+
+    if (!childrenMap.has(member.memberId)) {
+      setLoadingIds((prev) => new Set(prev).add(member.memberId));
+      try {
+        const result = await apiRequest<{ data: Member[] }>(
+          `/members/${member.memberId}/children`,
+          { token }
+        );
+        setChildrenMap((prev) => new Map(prev).set(member.memberId, result.data));
+      } catch {
+        // ignore
+      } finally {
+        setLoadingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(member.memberId);
+          return next;
+        });
+      }
+    }
+
+    setExpandedIds((prev) => new Set(prev).add(member.memberId));
+  }
+
+  useEffect(() => {
+    void toggleExpand(root);
+  }, [root.memberId]);
+
+  function renderNode(member: Member, depth: number): React.ReactNode {
+    const expanded = expandedIds.has(member.memberId);
+    const children = childrenMap.get(member.memberId) ?? [];
+    const isLoading = loadingIds.has(member.memberId);
+    const hasChildren = children.length > 0 || !childrenMap.has(member.memberId);
+
+    return (
+      <div key={member.memberId}>
+        <div className="tree-row" style={{ paddingLeft: depth * 28 }}>
+          {hasChildren ? (
+            <button
+              className="tree-toggle"
+              type="button"
+              disabled={isLoading}
+              onClick={() => void toggleExpand(member)}
+            >
+              {isLoading ? "…" : expanded ? "▾" : "▸"}
+            </button>
+          ) : (
+            <span className="tree-toggle tree-toggle-spacer" />
+          )}
+          <button
+            className="tree-name"
+            type="button"
+            onClick={() => onReroot(member)}
+            title="以此人为中心重新查看"
+          >
+            {member.name}
+          </button>
+          <span className="tree-meta">
+            {member.gender === "M" ? "男" : "女"}
+            {member.birthYear != null || member.deathYear != null
+              ? ` · ${member.birthYear ?? "?"} — ${member.deathYear ?? "?"}`
+              : ""}
+            · 第{member.generation}代
+          </span>
+        </div>
+        {expanded &&
+          children.map((child) => (
+            <div key={child.memberId}>{renderNode(child, depth + 1)}</div>
+          ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="tree-view">
+      <div className="tree-header">
+        <button className="ghost-button" type="button" onClick={onBack}>
+          <ArrowLeft size={16} />
+          <span>返回列表</span>
+        </button>
+        <span className="tree-root-label">
+          当前中心：<strong>{root.name}</strong>
+        </span>
+      </div>
+      <div className="tree-body">{renderNode(root, 0)}</div>
     </div>
   );
 }
@@ -729,6 +1204,16 @@ function MembersPage({
   const [loading, setLoading] = useState(true);
   const [familyLoading, setFamilyLoading] = useState(true);
   const [error, setError] = useState("");
+  const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [treeRoot, setTreeRoot] = useState<Member | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [genderStats, setGenderStats] = useState({ male: 0, female: 0, total: 0 });
+  const pageSize = 20;
+
+  const malePct = genderStats.total > 0 ? Math.round((genderStats.male / genderStats.total) * 100) : 0;
+  const femalePct = genderStats.total > 0 ? Math.round((genderStats.female / genderStats.total) * 100) : 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   async function loadFamilySidebar() {
     setFamilyLoading(true);
@@ -745,20 +1230,35 @@ function MembersPage({
   async function loadMembers() {
     setLoading(true);
     setError("");
+    const offset = (page - 1) * pageSize;
     const params = new URLSearchParams({
       familyId: String(family.familyId),
-      limit: "80"
+      limit: String(pageSize),
+      offset: String(offset)
     });
     if (keyword.trim()) params.set("q", keyword.trim());
     if (generation.trim()) params.set("generation", generation.trim());
 
     try {
-      const result = await apiRequest<{ data: Member[] }>(`/members?${params.toString()}`, { token });
+      const result = await apiRequest<{ data: Member[]; total: number }>(`/members?${params.toString()}`, { token });
       setMembers(result.data);
+      setTotalCount(result.total);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载失败");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadGenderStats() {
+    try {
+      const result = await apiRequest<{ data: { male: number; female: number; total: number } }>(
+        `/families/${family.familyId}/stats`,
+        { token }
+      );
+      setGenderStats(result.data);
+    } catch {
+      // ignore
     }
   }
 
@@ -767,11 +1267,19 @@ function MembersPage({
   }, [token, refreshKey]);
 
   useEffect(() => {
+    setPage(1);
+  }, [keyword, generation]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadMembers();
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [family.familyId, keyword, generation]);
+  }, [family.familyId, keyword, generation, page]);
+
+  useEffect(() => {
+    void loadGenderStats();
+  }, [family.familyId]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -807,7 +1315,9 @@ function MembersPage({
       }
       setEditing(null);
       setForm({ ...emptyMemberForm });
+      setMemberModalOpen(false);
       await loadMembers();
+      await loadGenderStats();
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
     }
@@ -817,17 +1327,28 @@ function MembersPage({
     if (!window.confirm(`删除 ${member.name}？`)) return;
     await apiRequest(`/members/${member.memberId}`, { method: "DELETE", token });
     await loadMembers();
+    await loadGenderStats();
+  }
+
+  function startCreate() {
+    setEditing(null);
+    setForm({ ...emptyMemberForm });
+    setError("");
+    setMemberModalOpen(true);
   }
 
   function startEdit(member: Member) {
     setEditing(member);
     setForm(memberToForm(member));
+    setError("");
+    setMemberModalOpen(true);
   }
 
   function cancelEdit() {
     setEditing(null);
     setForm({ ...emptyMemberForm });
     setError("");
+    setMemberModalOpen(false);
   }
 
   function switchFamily(nextFamily: Family) {
@@ -837,6 +1358,8 @@ function MembersPage({
     setEditing(null);
     setForm({ ...emptyMemberForm });
     setError("");
+    setPage(1);
+    setTreeRoot(null);
   }
 
   return (
@@ -884,7 +1407,17 @@ function MembersPage({
           </div>
         </header>
 
-        <section className="toolbar" aria-label="成员筛选">
+        {treeRoot ? (
+          <TreeView
+            root={treeRoot}
+            token={token}
+            onBack={() => setTreeRoot(null)}
+            onReroot={(member) => setTreeRoot(member)}
+            onSelectFamily={onSelectFamily}
+          />
+        ) : (
+          <>
+            <section className="toolbar" aria-label="成员筛选">
           <label className="search-box">
             <Search size={18} />
             <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索姓名" />
@@ -896,17 +1429,110 @@ function MembersPage({
             placeholder="代数"
             inputMode="numeric"
           />
+          <button className="primary-button" type="button" onClick={startCreate}>
+            <Plus size={16} />
+            <span>新增成员</span>
+          </button>
         </section>
 
-        <section className="management-grid members-grid">
-          <form className="panel form-panel" onSubmit={submit}>
+        <div className="detail-content">
+          <section className="panel list-panel member-list-panel">
             <div className="panel-heading">
-              <h2>{editing ? "编辑成员" : "新增成员"}</h2>
-              {editing && (
-                <button className="icon-button" type="button" title="取消" onClick={cancelEdit}>
-                  <X size={17} />
-                </button>
+              <h2>成员列表</h2>
+              <span className="list-count">{members.length} 条</span>
+            </div>
+
+            <div className="member-list">
+              {loading ? (
+                <div className="empty-state">加载中</div>
+              ) : (
+                members.map((member) => (
+                  <article className="member-row" key={member.memberId}>
+                    <span className="avatar">
+                      <UserRound size={18} />
+                    </span>
+                    <span className="member-main">
+                      <button
+                        className="member-name-link"
+                        type="button"
+                        onClick={() => setTreeRoot(member)}
+                        title="查看树状图"
+                      >
+                        {member.name}
+                      </button>
+                      <span>
+                        ID {member.memberId} · 第 {member.generation} 代 · {member.gender === "M" ? "男" : "女"}
+                      </span>
+                    </span>
+                    <span className="member-years">
+                      {member.birthYear ?? "-"} / {member.deathYear ?? "-"}
+                    </span>
+                    <span className="row-actions">
+                      <button className="icon-button" type="button" title="查看树状图" onClick={() => setTreeRoot(member)}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="17" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="10" r="2"/><circle cx="6" cy="10" r="2"/><line x1="6" y1="10" x2="12" y2="6"/><line x1="12" y1="6" x2="18" y2="10"/><line x1="18" y1="10" x2="12" y2="17"/><line x1="12" y1="17" x2="6" y2="10"/></svg>
+                      </button>
+                      <button className="icon-button" type="button" title="编辑" onClick={() => startEdit(member)}>
+                        <Edit3 size={16} />
+                      </button>
+                      <button className="icon-button" type="button" title="删除" onClick={() => void removeMember(member)}>
+                        <Trash2 size={16} />
+                      </button>
+                    </span>
+                  </article>
+                ))
               )}
+            </div>
+
+            {totalPages > 1 && (
+              <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            )}
+          </section>
+
+          <aside className="detail-dashboard">
+            <article className="metric">
+              <span>家族成员数</span>
+              <strong>{family.memberCount.toLocaleString()}</strong>
+            </article>
+
+            <div className="gender-card">
+              <span className="gender-card-label">男女比例</span>
+              <div
+                className="pie-chart"
+                style={{
+                  background: genderStats.total > 0
+                    ? `conic-gradient(#111111 0deg ${malePct * 3.6}deg, #e0e0e0 ${malePct * 3.6}deg 360deg)`
+                    : "#f0f0f0"
+                }}
+              />
+              <div className="gender-legend">
+                <div className="gender-item">
+                  <span className="gender-dot male-dot" />
+                  <span>男</span>
+                  <strong>{genderStats.male}</strong>
+                  <span className="gender-pct">{malePct}%</span>
+                </div>
+                <div className="gender-item">
+                  <span className="gender-dot female-dot" />
+                  <span>女</span>
+                  <strong>{genderStats.female}</strong>
+                  <span className="gender-pct">{femalePct}%</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+          </>
+        )}
+      </section>
+
+      {memberModalOpen && (
+        <div className="modal-backdrop" onMouseDown={cancelEdit}>
+          <form className="modal-panel" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>{editing ? "编辑成员" : "新增成员"}</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={cancelEdit}>
+                <X size={17} />
+              </button>
             </div>
             <div className="form-body">
               <label>
@@ -970,46 +1596,8 @@ function MembersPage({
               </button>
             </div>
           </form>
-
-          <section className="panel list-panel">
-            <div className="panel-heading">
-              <h2>成员列表</h2>
-              <span className="list-count">{members.length} 条</span>
-            </div>
-
-            <div className="member-list">
-              {loading ? (
-                <div className="empty-state">加载中</div>
-              ) : (
-                members.map((member) => (
-                  <article className="member-row" key={member.memberId}>
-                    <span className="avatar">
-                      <UserRound size={18} />
-                    </span>
-                    <span className="member-main">
-                      <strong>{member.name}</strong>
-                      <span>
-                        ID {member.memberId} · 第 {member.generation} 代 · {member.gender === "M" ? "男" : "女"}
-                      </span>
-                    </span>
-                    <span className="member-years">
-                      {member.birthYear ?? "-"} / {member.deathYear ?? "-"}
-                    </span>
-                    <span className="row-actions">
-                      <button className="icon-button" type="button" title="编辑" onClick={() => startEdit(member)}>
-                        <Edit3 size={16} />
-                      </button>
-                      <button className="icon-button" type="button" title="删除" onClick={() => void removeMember(member)}>
-                        <Trash2 size={16} />
-                      </button>
-                    </span>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-        </section>
-      </section>
+        </div>
+      )}
     </div>
   );
 }

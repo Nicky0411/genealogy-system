@@ -34,7 +34,7 @@ export function toMember(row: MemberRow) {
   };
 }
 
-export async function getAncestors(memberId: number) {
+export async function getAncestors(memberId: number, maxDepth?: number) {
   const result = await query<MemberRow>(
     `
     WITH RECURSIVE ancestors AS (
@@ -50,12 +50,13 @@ export async function getAncestors(memberId: number) {
       JOIN members current_member ON current_member.member_id = ancestors.member_id
       JOIN members parent ON parent.member_id IN (current_member.father_id, current_member.mother_id)
       WHERE NOT parent.member_id = ANY(ancestors.path)
+        AND ($2::INT IS NULL OR ancestors.depth < $2)
     )
     SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id, depth
     FROM ancestors
     ORDER BY depth, generation, member_id
     `,
-    [memberId]
+    [memberId, maxDepth ?? null]
   );
   return result.rows.map(toMember);
 }
@@ -84,41 +85,81 @@ export async function getDescendants(memberId: number) {
   return result.rows.map(toMember);
 }
 
-export async function getRelationPath(startMemberId: number, targetMemberId: number, maxDepth = 20) {
-  const pathResult = await query<{ path: string[]; depth: number }>(
+export async function getRelationPath(startMemberId: number, targetMemberId: number, maxDepth = 24) {
+  if (startMemberId === targetMemberId) {
+    const membersResult = await query<MemberRow>(
+      `SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id FROM members WHERE member_id = $1`,
+      [startMemberId]
+    );
+    return { depth: 0, path: membersResult.rows.map(toMember) };
+  }
+
+  // check direct relationships
+  const directResult = await query<{ member_id: string; father_id: string | null; mother_id: string | null; spouse_id: string | null }>(
+    `SELECT member_id, father_id, mother_id, spouse_id FROM members WHERE member_id IN ($1, $2)`,
+    [startMemberId, targetMemberId]
+  );
+  if (directResult.rows.length < 2) return null;
+
+  const a = directResult.rows.find((r) => Number(r.member_id) === startMemberId);
+  const b = directResult.rows.find((r) => Number(r.member_id) === targetMemberId);
+  if (!a || !b) return null;
+
+  // direct spouse
+  if ((a.spouse_id && Number(a.spouse_id) === targetMemberId) || (b.spouse_id && Number(b.spouse_id) === startMemberId)) {
+    const membersResult = await query<MemberRow>(
+      `SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id FROM members WHERE member_id IN ($1, $2) ORDER BY CASE member_id WHEN $1 THEN 1 ELSE 2 END`,
+      [startMemberId, targetMemberId]
+    );
+    return { depth: 1, path: membersResult.rows.map(toMember) };
+  }
+
+  // bidirectional ancestor search: go up from both, find LCA
+  const halfDepth = Math.ceil(maxDepth / 2);
+  const lcaResult = await query<{ lca_id: string; depth_a: number; depth_b: number; path_a: string; path_b: string }>(
     `
-    WITH RECURSIVE relation_path AS (
-      SELECT $1::BIGINT AS member_id, ARRAY[$1::BIGINT] AS path, 0 AS depth
-
+    WITH RECURSIVE
+    anc_a AS (
+      SELECT member_id, member_id::TEXT AS chain, 0 AS depth
+      FROM members WHERE member_id = $1
       UNION ALL
-
-      SELECT next_member.member_id, relation_path.path || next_member.member_id, relation_path.depth + 1
-      FROM relation_path
-      JOIN LATERAL (
-        SELECT father_id AS member_id FROM members WHERE member_id = relation_path.member_id AND father_id IS NOT NULL
-        UNION
-        SELECT mother_id AS member_id FROM members WHERE member_id = relation_path.member_id AND mother_id IS NOT NULL
-        UNION
-        SELECT spouse_id AS member_id FROM members WHERE member_id = relation_path.member_id AND spouse_id IS NOT NULL
-        UNION
-        SELECT member_id FROM members WHERE father_id = relation_path.member_id OR mother_id = relation_path.member_id
-      ) AS next_member ON true
-      WHERE relation_path.depth < $3
-        AND NOT next_member.member_id = ANY(relation_path.path)
+      SELECT m.member_id, CONCAT(a.chain, ',', m.member_id::TEXT), a.depth + 1
+      FROM anc_a a
+      JOIN members cur ON cur.member_id = a.member_id
+      JOIN members m ON (m.member_id = cur.father_id OR m.member_id = cur.mother_id)
+      WHERE a.depth < $3
+    ),
+    anc_b AS (
+      SELECT member_id, member_id::TEXT AS chain, 0 AS depth
+      FROM members WHERE member_id = $2
+      UNION ALL
+      SELECT m.member_id, CONCAT(b.chain, ',', m.member_id::TEXT), b.depth + 1
+      FROM anc_b b
+      JOIN members cur ON cur.member_id = b.member_id
+      JOIN members m ON (m.member_id = cur.father_id OR m.member_id = cur.mother_id)
+      WHERE b.depth < $3
     )
-    SELECT path, depth
-    FROM relation_path
-    WHERE member_id = $2
-    ORDER BY depth
+    SELECT a.member_id AS lca_id, a.depth AS depth_a, b.depth AS depth_b,
+           a.chain AS path_a, b.chain AS path_b
+    FROM anc_a a
+    JOIN anc_b b ON a.member_id = b.member_id
+    ORDER BY (a.depth + b.depth)
     LIMIT 1
     `,
-    [startMemberId, targetMemberId, maxDepth]
+    [startMemberId, targetMemberId, halfDepth]
   );
 
-  const pathRow = pathResult.rows[0];
-  if (!pathRow) {
-    return null;
-  }
+  const lcaRow = lcaResult.rows[0];
+  if (!lcaRow) return null;
+
+  // path_a goes from start UP to LCA. path_b goes from target UP to LCA.
+  // Full path: start → ... → LCA → ... → target
+  const pathAIds = lcaRow.path_a.split(",").map(Number);
+  const pathBIds = lcaRow.path_b.split(",").map(Number);
+  // reverse pathB (currently target → ... → LCA) to be LCA → ... → target
+  pathBIds.reverse();
+  // combine: pathA (start → LCA) + pathB without duplicate LCA (LCA → target)
+  const fullPathIds = [...pathAIds, ...pathBIds.slice(1)];
 
   const membersResult = await query<MemberRow>(
     `
@@ -127,11 +168,11 @@ export async function getRelationPath(startMemberId: number, targetMemberId: num
     WHERE member_id = ANY($1::BIGINT[])
     ORDER BY ARRAY_POSITION($1::BIGINT[], member_id)
     `,
-    [pathRow.path]
+    [fullPathIds]
   );
 
   return {
-    depth: pathRow.depth,
+    depth: fullPathIds.length - 1,
     path: membersResult.rows.map(toMember)
   };
 }

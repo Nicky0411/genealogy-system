@@ -18,13 +18,14 @@ genealogyRouter.get(
   "/members/:memberId/ancestors",
   asyncHandler(async (req, res) => {
     const memberId = Number(req.params.memberId);
+    const maxDepth = req.query.maxDepth ? Number(req.query.maxDepth) : undefined;
     const familyId = await getMemberFamilyId(memberId);
     if (!familyId) {
       res.status(404).json({ message: "Member not found" });
       return;
     }
     await assertFamilyAccess(req.user!.userId, familyId);
-    res.json({ data: await getAncestors(memberId) });
+    res.json({ data: await getAncestors(memberId, maxDepth) });
   })
 );
 
@@ -47,7 +48,7 @@ genealogyRouter.get(
   asyncHandler(async (req, res) => {
     const startMemberId = Number(req.params.memberId);
     const targetMemberId = Number(req.query.targetId);
-    const maxDepth = Number(req.query.maxDepth ?? 20);
+    const maxDepth = Number(req.query.maxDepth ?? 24);
     const familyId = await getMemberFamilyId(startMemberId);
 
     if (!familyId) {
