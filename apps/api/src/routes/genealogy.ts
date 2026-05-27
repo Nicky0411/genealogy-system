@@ -3,7 +3,7 @@ import { query } from "../db/query";
 import { asyncHandler } from "../middleware/asyncHandler";
 import { requireAuth } from "../middleware/auth";
 import { assertFamilyAccess } from "../services/access";
-import { getAncestors, getDescendants, getRelationPath } from "../services/genealogyService";
+import { getAncestors, getDescendants, getRelationPath, getSpouseAndChildren, getUnmarriedMalesOver50, getBornBeforeGenAverage, getGreatGrandchildrenPerformance } from "../services/genealogyService";
 
 export const genealogyRouter = Router();
 
@@ -85,5 +85,60 @@ genealogyRouter.get(
     );
 
     res.json({ data: result.rows[0] ?? null });
+  })
+);
+
+// Query 1: spouse and children by member ID
+genealogyRouter.get(
+  "/members/:memberId/spouse-children",
+  asyncHandler(async (req, res) => {
+    const memberId = Number(req.params.memberId);
+    const familyId = await getMemberFamilyId(memberId);
+    if (!familyId) {
+      res.status(404).json({ message: "Member not found" });
+      return;
+    }
+    await assertFamilyAccess(req.user!.userId, familyId);
+    res.json({ data: await getSpouseAndChildren(memberId) });
+  })
+);
+
+// Query 4: unmarried males over 50 in a family
+genealogyRouter.get(
+  "/families/:familyId/unmarried-males-over-50",
+  asyncHandler(async (req, res) => {
+    const familyId = Number(req.params.familyId);
+    await assertFamilyAccess(req.user!.userId, familyId);
+    res.json({ data: await getUnmarriedMalesOver50(familyId) });
+  })
+);
+
+// Query 5: members born before generation average in a family
+genealogyRouter.get(
+  "/families/:familyId/born-before-gen-avg",
+  asyncHandler(async (req, res) => {
+    const familyId = Number(req.params.familyId);
+    await assertFamilyAccess(req.user!.userId, familyId);
+    res.json({ data: await getBornBeforeGenAverage(familyId) });
+  })
+);
+
+// Performance comparison: great-grandchildren query with/without indexes
+genealogyRouter.get(
+  "/performance/great-grandchildren",
+  asyncHandler(async (req, res) => {
+    const memberId = Number(req.query.memberId);
+    const familyId = await getMemberFamilyId(memberId);
+    if (!familyId) {
+      res.status(404).json({ message: "Member not found" });
+      return;
+    }
+    await assertFamilyAccess(req.user!.userId, familyId);
+    const result = await getGreatGrandchildrenPerformance(memberId);
+    if (!result) {
+      res.status(404).json({ message: "Member not found" });
+      return;
+    }
+    res.json({ data: result });
   })
 );

@@ -635,6 +635,55 @@ function FamiliesPage({
   const [pathLoading, setPathLoading] = useState(false);
   const [pathError, setPathError] = useState("");
 
+  // query 1: spouse and children
+  const [spouseModalOpen, setSpouseModalOpen] = useState(false);
+  const [spouseMemberId, setSpouseMemberId] = useState("");
+  const [spouseResult, setSpouseResult] = useState<{ member: Member; spouse: Member | null; children: Member[] } | null>(null);
+  const [spouseLoading, setSpouseLoading] = useState(false);
+  const [spouseError, setSpouseError] = useState("");
+
+  // query 2: recursive ancestor list
+  const [recAncestorModalOpen, setRecAncestorModalOpen] = useState(false);
+  const [recAncestorMemberId, setRecAncestorMemberId] = useState("");
+  const [recAncestorMaxDepth, setRecAncestorMaxDepth] = useState("");
+  const [recAncestorResults, setRecAncestorResults] = useState<(Member & { depth?: number })[]>([]);
+  const [recAncestorLoading, setRecAncestorLoading] = useState(false);
+  const [recAncestorError, setRecAncestorError] = useState("");
+
+  // query 3: longest-lived generation
+  const [longestModalOpen, setLongestModalOpen] = useState(false);
+  const [longestFamilyId, setLongestFamilyId] = useState("");
+  const [longestResult, setLongestResult] = useState<{ generation: number; memberCount: number; averageLifespan: number } | null>(null);
+  const [longestLoading, setLongestLoading] = useState(false);
+  const [longestError, setLongestError] = useState("");
+
+  // query 4: unmarried males over 50
+  const [unmarriedModalOpen, setUnmarriedModalOpen] = useState(false);
+  const [unmarriedFamilyId, setUnmarriedFamilyId] = useState("");
+  const [unmarriedResult, setUnmarriedResult] = useState<Member[]>([]);
+  const [unmarriedLoading, setUnmarriedLoading] = useState(false);
+  const [unmarriedError, setUnmarriedError] = useState("");
+
+  // query 5: born before generation average
+  const [earlyBornModalOpen, setEarlyBornModalOpen] = useState(false);
+  const [earlyBornFamilyId, setEarlyBornFamilyId] = useState("");
+  const [earlyBornResult, setEarlyBornResult] = useState<(Member & { avgBirthYear: number | null; genCount: number })[]>([]);
+  const [earlyBornLoading, setEarlyBornLoading] = useState(false);
+  const [earlyBornError, setEarlyBornError] = useState("");
+
+  // performance comparison
+  const [perfModalOpen, setPerfModalOpen] = useState(false);
+  const [perfMemberId, setPerfMemberId] = useState("");
+  const [perfResult, setPerfResult] = useState<{
+    member: Member;
+    descendantCount: number;
+    withIndex: { planText: string; execMs: number | null; timedOut: boolean };
+    withoutIndex: { planText: string; execMs: number | null; timedOut: boolean };
+  } | null>(null);
+  const [perfLoading, setPerfLoading] = useState(false);
+  const [perfError, setPerfError] = useState("");
+  const [perfTab, setPerfTab] = useState<"with" | "without">("with");
+
   async function loadFamilies() {
     setLoading(true);
     setError("");
@@ -792,6 +841,130 @@ function FamiliesPage({
     }
   }
 
+  async function querySpouseChildren(event: FormEvent) {
+    event.preventDefault();
+    setSpouseError("");
+    setSpouseResult(null);
+    setSpouseLoading(true);
+    try {
+      const mid = Number(spouseMemberId);
+      const result = await apiRequest<{ data: { member: Member; spouse: Member | null; children: Member[] } | null }>(
+        `/genealogy/members/${mid}/spouse-children`,
+        { token }
+      );
+      setSpouseResult(result.data);
+      if (!result.data) setSpouseError("成员不存在");
+    } catch (err) {
+      setSpouseError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setSpouseLoading(false);
+    }
+  }
+
+  async function queryRecAncestors(event: FormEvent) {
+    event.preventDefault();
+    setRecAncestorError("");
+    setRecAncestorResults([]);
+    setRecAncestorLoading(true);
+    try {
+      const mid = Number(recAncestorMemberId);
+      const maxDepth = recAncestorMaxDepth ? Number(recAncestorMaxDepth) : undefined;
+      const result = await apiRequest<{ data: (Member & { depth?: number })[] }>(
+        `/genealogy/members/${mid}/ancestors${maxDepth ? `?maxDepth=${maxDepth}` : ""}`,
+        { token }
+      );
+      const seen = new Map<number, Member & { depth?: number }>();
+      for (const m of result.data) {
+        if (!seen.has(m.memberId)) seen.set(m.memberId, m);
+      }
+      const deduped = [...seen.values()].sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0) || a.generation - b.generation);
+      setRecAncestorResults(deduped);
+      if (deduped.length === 0) setRecAncestorError("未查询到祖先数据（可能此人没有录入父辈信息）");
+    } catch (err) {
+      setRecAncestorError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setRecAncestorLoading(false);
+    }
+  }
+
+  async function queryLongestLived(event: FormEvent) {
+    event.preventDefault();
+    setLongestError("");
+    setLongestResult(null);
+    setLongestLoading(true);
+    try {
+      const fid = Number(longestFamilyId);
+      const result = await apiRequest<{ data: { generation: number; memberCount: number; averageLifespan: number } | null }>(
+        `/genealogy/families/${fid}/longest-lived-generation`,
+        { token }
+      );
+      setLongestResult(result.data);
+      if (!result.data) setLongestError("该家族暂无足够的生卒年份数据");
+    } catch (err) {
+      setLongestError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setLongestLoading(false);
+    }
+  }
+
+  async function queryUnmarried(event: FormEvent) {
+    event.preventDefault();
+    setUnmarriedError("");
+    setUnmarriedResult([]);
+    setUnmarriedLoading(true);
+    try {
+      const fid = Number(unmarriedFamilyId);
+      const result = await apiRequest<{ data: Member[] }>(
+        `/genealogy/families/${fid}/unmarried-males-over-50`,
+        { token }
+      );
+      setUnmarriedResult(result.data);
+    } catch (err) {
+      setUnmarriedError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setUnmarriedLoading(false);
+    }
+  }
+
+  async function queryEarlyBorn(event: FormEvent) {
+    event.preventDefault();
+    setEarlyBornError("");
+    setEarlyBornResult([]);
+    setEarlyBornLoading(true);
+    try {
+      const fid = Number(earlyBornFamilyId);
+      const result = await apiRequest<{ data: (Member & { avgBirthYear: number | null; genCount: number })[] }>(
+        `/genealogy/families/${fid}/born-before-gen-avg`,
+        { token }
+      );
+      setEarlyBornResult(result.data);
+    } catch (err) {
+      setEarlyBornError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setEarlyBornLoading(false);
+    }
+  }
+
+  async function queryPerformance(event: FormEvent) {
+    event.preventDefault();
+    setPerfError("");
+    setPerfResult(null);
+    setPerfLoading(true);
+    setPerfTab("with");
+    try {
+      const mid = Number(perfMemberId);
+      const result = await apiRequest<{ data: typeof perfResult }>(
+        `/genealogy/performance/great-grandchildren?memberId=${mid}`,
+        { token }
+      );
+      setPerfResult(result.data);
+    } catch (err) {
+      setPerfError(err instanceof Error ? err.message : "查询失败");
+    } finally {
+      setPerfLoading(false);
+    }
+  }
+
   const totalMembers = useMemo(() => families.reduce((sum, family) => sum + family.memberCount, 0), [families]);
 
   return (
@@ -811,6 +984,30 @@ function FamiliesPage({
         <button className="ghost-button" type="button" onClick={() => { setPathError(""); setPathResult(null); setPathStartId(""); setPathTargetId(""); setPathModalOpen(true); }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="17" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="10" r="2"/><circle cx="6" cy="10" r="2"/><line x1="6" y1="10" x2="12" y2="6"/><line x1="12" y1="6" x2="18" y2="10"/><line x1="18" y1="10" x2="12" y2="17"/><line x1="12" y1="17" x2="6" y2="10"/></svg>
           <span>亲缘关系查询</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setSpouseError(""); setSpouseResult(null); setSpouseMemberId(""); setSpouseModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+          <span>配偶子女查询</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setRecAncestorError(""); setRecAncestorResults([]); setRecAncestorMemberId(""); setRecAncestorMaxDepth(""); setRecAncestorModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="10"/></svg>
+          <span>递归祖先查询</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setLongestError(""); setLongestResult(null); setLongestFamilyId(""); setLongestModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+          <span>最长寿辈分</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setUnmarriedError(""); setUnmarriedResult([]); setUnmarriedFamilyId(""); setUnmarriedModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 10-16 0"/></svg>
+          <span>未婚高龄男性</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setEarlyBornError(""); setEarlyBornResult([]); setEarlyBornFamilyId(""); setEarlyBornModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span>早于平均出生年份</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={() => { setPerfError(""); setPerfResult(null); setPerfMemberId(""); setPerfModalOpen(true); }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span>索引性能对比</span>
         </button>
       </div>
 
@@ -1059,6 +1256,289 @@ function FamiliesPage({
                         )}
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {spouseModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setSpouseModalOpen(false)}>
+          <div className="modal-panel modal-wide" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>配偶及子女查询</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setSpouseModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={querySpouseChildren}>
+                <label>
+                  <span>人物 ID</span>
+                  <input required inputMode="numeric" value={spouseMemberId} onChange={(e) => setSpouseMemberId(e.target.value)} placeholder="输入成员 ID" />
+                </label>
+                <button className="primary-button wide-button" type="submit" disabled={spouseLoading}>
+                  <Search size={18} /><span>{spouseLoading ? "查询中" : "查询"}</span>
+                </button>
+              </form>
+              {spouseError && <p className="error-text">{spouseError}</p>}
+              {spouseResult && (
+                <div className="query-results">
+                  <div className="spouse-result-grid">
+                    <div>
+                      <h3 className="result-section-title">本人</h3>
+                      <div className="path-node"><span className="path-node-name">{spouseResult.member.name}</span><span className="path-node-meta">ID {spouseResult.member.memberId} · {spouseResult.member.gender === "M" ? "男" : "女"} · 第{spouseResult.member.generation}代</span></div>
+                    </div>
+                    <div>
+                      <h3 className="result-section-title">配偶</h3>
+                      {spouseResult.spouse ? (
+                        <div className="path-node"><span className="path-node-name">{spouseResult.spouse.name}</span><span className="path-node-meta">ID {spouseResult.spouse.memberId} · {spouseResult.spouse.gender === "M" ? "男" : "女"} · 第{spouseResult.spouse.generation}代</span></div>
+                      ) : <p className="muted-text">无配偶</p>}
+                    </div>
+                  </div>
+                  <h3 className="result-section-title">子女 ({spouseResult.children.length}人)</h3>
+                  {spouseResult.children.length === 0 ? <p className="muted-text">无子女记录</p> : (
+                    <div className="member-mini-list">
+                      {spouseResult.children.map((c) => (
+                        <div key={c.memberId} className="member-mini-item"><span className="member-mini-name">{c.name}</span><span className="member-mini-meta">ID {c.memberId} · {c.gender === "M" ? "男" : "女"} · 第{c.generation}代{c.birthYear != null ? ` · ${c.birthYear}年` : ""}</span></div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {recAncestorModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setRecAncestorModalOpen(false)}>
+          <div className="modal-panel modal-wide" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>递归祖先查询（Recursive CTE）</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setRecAncestorModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryRecAncestors}>
+                <div className="form-pair">
+                  <label>
+                    <span>人物 ID</span>
+                    <input required inputMode="numeric" value={recAncestorMemberId} onChange={(e) => setRecAncestorMemberId(e.target.value)} placeholder="输入成员 ID" />
+                  </label>
+                  <label>
+                    <span>追溯深度（可选，留空为全部）</span>
+                    <input inputMode="numeric" value={recAncestorMaxDepth} onChange={(e) => setRecAncestorMaxDepth(e.target.value)} placeholder="如: 10" />
+                  </label>
+                </div>
+                <button className="primary-button wide-button" type="submit" disabled={recAncestorLoading}>
+                  <Search size={18} /><span>{recAncestorLoading ? "查询中" : "查询祖先"}</span>
+                </button>
+              </form>
+              {recAncestorError && <p className="error-text">{recAncestorError}</p>}
+              {recAncestorResults.length > 0 && (
+                <div className="query-results">
+                  <p className="result-count">共追溯 {recAncestorResults.length} 位祖先</p>
+                  <div className="member-mini-list">
+                    {recAncestorResults.map((m) => (
+                      <div key={m.memberId} className="member-mini-item">
+                        <span className="member-mini-name">{m.name}</span>
+                        <span className="member-mini-meta">
+                          ID {m.memberId} · {m.gender === "M" ? "男" : "女"} · 第{m.generation}代{m.depth != null ? ` · 向上${m.depth}代` : ""}{m.birthYear != null || m.deathYear != null ? ` · ${m.birthYear ?? "?"} — ${m.deathYear ?? "?"}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {longestModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setLongestModalOpen(false)}>
+          <div className="modal-panel" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>最长寿辈分</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setLongestModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryLongestLived}>
+                <label>
+                  <span>选择家族</span>
+                  <select required value={longestFamilyId} onChange={(e) => setLongestFamilyId(e.target.value)}>
+                    <option value="">请选择家族</option>
+                    {families.map((f) => <option key={f.familyId} value={f.familyId}>{f.familyName} ({f.surname})</option>)}
+                  </select>
+                </label>
+                <button className="primary-button wide-button" type="submit" disabled={longestLoading}>
+                  <Search size={18} /><span>{longestLoading ? "查询中" : "查询"}</span>
+                </button>
+              </form>
+              {longestError && <p className="error-text">{longestError}</p>}
+              {longestResult && (
+                <div className="query-results">
+                  <div className="stat-card">
+                    <p className="stat-label">辈分</p>
+                    <p className="stat-value">第{longestResult.generation}代</p>
+                  </div>
+                  <div className="stat-card">
+                    <p className="stat-label">该辈分人数</p>
+                    <p className="stat-value">{longestResult.memberCount}人</p>
+                  </div>
+                  <div className="stat-card">
+                    <p className="stat-label">平均寿命</p>
+                    <p className="stat-value">{longestResult.averageLifespan}岁</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unmarriedModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setUnmarriedModalOpen(false)}>
+          <div className="modal-panel modal-wide" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>未婚高龄男性（年龄 &gt; 50）</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setUnmarriedModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryUnmarried}>
+                <label>
+                  <span>选择家族</span>
+                  <select required value={unmarriedFamilyId} onChange={(e) => setUnmarriedFamilyId(e.target.value)}>
+                    <option value="">请选择家族</option>
+                    {families.map((f) => <option key={f.familyId} value={f.familyId}>{f.familyName} ({f.surname})</option>)}
+                  </select>
+                </label>
+                <button className="primary-button wide-button" type="submit" disabled={unmarriedLoading}>
+                  <Search size={18} /><span>{unmarriedLoading ? "查询中" : "查询"}</span>
+                </button>
+              </form>
+              {unmarriedError && <p className="error-text">{unmarriedError}</p>}
+              {unmarriedResult.length > 0 && (
+                <div className="query-results">
+                  <p className="result-count">共 {unmarriedResult.length} 人</p>
+                  <div className="member-mini-list">
+                    {unmarriedResult.map((m) => (
+                      <div key={m.memberId} className="member-mini-item"><span className="member-mini-name">{m.name}</span><span className="member-mini-meta">ID {m.memberId} · 第{m.generation}代 · {m.birthYear != null ? `${m.birthYear}年 (${new Date().getFullYear() - m.birthYear}岁)` : "出生年份未知"}</span></div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(unmarriedResult.length === 0 && !unmarriedError && unmarriedFamilyId && !unmarriedLoading) ? (
+                <p className="muted-text">未找到符合条件的成员</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {earlyBornModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setEarlyBornModalOpen(false)}>
+          <div className="modal-panel modal-wide" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>出生年份早于该辈分平均值的成员</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setEarlyBornModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryEarlyBorn}>
+                <label>
+                  <span>选择家族</span>
+                  <select required value={earlyBornFamilyId} onChange={(e) => setEarlyBornFamilyId(e.target.value)}>
+                    <option value="">请选择家族</option>
+                    {families.map((f) => <option key={f.familyId} value={f.familyId}>{f.familyName} ({f.surname})</option>)}
+                  </select>
+                </label>
+                <button className="primary-button wide-button" type="submit" disabled={earlyBornLoading}>
+                  <Search size={18} /><span>{earlyBornLoading ? "查询中" : "查询"}</span>
+                </button>
+              </form>
+              {earlyBornError && <p className="error-text">{earlyBornError}</p>}
+              {earlyBornResult.length > 0 && (
+                <div className="query-results">
+                  <p className="result-count">共 {earlyBornResult.length} 人</p>
+                  <div className="member-mini-list">
+                    {earlyBornResult.map((m) => (
+                      <div key={m.memberId} className="member-mini-item">
+                        <span className="member-mini-name">{m.name}</span>
+                        <span className="member-mini-meta">
+                          ID {m.memberId} · {m.gender === "M" ? "男" : "女"} · 第{m.generation}代 · 出生{m.birthYear}年
+                          · 该辈平均{m.avgBirthYear}年 · 共{m.genCount}人
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(earlyBornResult.length === 0 && !earlyBornError && earlyBornFamilyId && !earlyBornLoading) ? (
+                <p className="muted-text">未找到符合条件的成员</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {perfModalOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setPerfModalOpen(false)}>
+          <div className="modal-panel modal-wide modal-perf" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading modal-heading">
+              <h2>索引性能对比 — 曾孙查询（四代）</h2>
+              <button className="icon-button" type="button" title="关闭" onClick={() => setPerfModalOpen(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="form-body">
+              <form onSubmit={queryPerformance}>
+                <label>
+                  <span>曾祖父 ID</span>
+                  <input required inputMode="numeric" value={perfMemberId} onChange={(e) => setPerfMemberId(e.target.value)} placeholder="输入曾祖父的成员 ID" />
+                </label>
+                <button className="primary-button wide-button" type="submit" disabled={perfLoading}>
+                  <Search size={18} /><span>{perfLoading ? "分析中" : "执行对比"}</span>
+                </button>
+              </form>
+              {perfError && <p className="error-text">{perfError}</p>}
+              {perfResult && (
+                <div className="query-results">
+                  <p className="perf-summary">
+                    成员 <strong>{perfResult.member.name}</strong>（ID {perfResult.member.memberId}）共找到 <strong>{perfResult.descendantCount}</strong> 个四代内后代
+                  </p>
+                  <div className="perf-cards">
+                    <div className={`perf-card ${perfTab === "with" ? "perf-card-active" : ""}`} onClick={() => setPerfTab("with")}>
+                      <p className="perf-card-title">有索引</p>
+                      <p className="perf-card-time">{perfResult.withIndex.timedOut ? "超时" : perfResult.withIndex.execMs != null ? `${perfResult.withIndex.execMs} ms` : "N/A"}</p>
+                    </div>
+                    <div className={`perf-card ${perfTab === "without" ? "perf-card-active" : ""}`} onClick={() => setPerfTab("without")}>
+                      <p className="perf-card-title">无索引 (Seq Scan)</p>
+                      <p className="perf-card-time">{perfResult.withoutIndex.timedOut ? "超时 (&gt;30s)" : perfResult.withoutIndex.execMs != null ? `${perfResult.withoutIndex.execMs} ms` : "预估（未执行）"}</p>
+                    </div>
+                  </div>
+                  {perfResult.withIndex.execMs != null && perfResult.withoutIndex.execMs != null && (
+                    <p className="perf-speedup">
+                      索引加速比：<strong>{(perfResult.withoutIndex.execMs / perfResult.withIndex.execMs).toFixed(1)}x</strong>
+                    </p>
+                  )}
+                  {perfResult.withoutIndex.timedOut && (
+                    <p className="perf-speedup" style={{color: "#c62828"}}>无索引查询超过 30 秒已中断，实际差距远超有索引</p>
+                  )}
+                  <div className="perf-plan">
+                    <h3 className="perf-plan-title">
+                      {perfTab === "with" ? "EXPLAIN (ANALYZE, BUFFERS)" : "EXPLAIN (BUFFERS, 无 ANALYZE)"} — {perfTab === "with" ? "有索引" : "无索引 (Seq Scan)"}
+                    </h3>
+                    <pre className="perf-plan-text">{perfTab === "with" ? perfResult.withIndex.planText : perfResult.withoutIndex.planText}</pre>
                   </div>
                 </div>
               )}

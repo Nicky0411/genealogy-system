@@ -516,6 +516,7 @@ h2 {
   display: flex;
   gap: 10px;
   margin-bottom: 18px;
+  flex-wrap: wrap;
 }
 
 .home-family-section {
@@ -1045,6 +1046,157 @@ h2 {
   padding-top: 14px;
 }
 
+.spouse-result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.result-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #737373;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px;
+}
+
+.muted-text {
+  color: #aaa;
+  font-size: 13px;
+  text-align: center;
+  margin: 8px 0;
+}
+
+.result-count {
+  font-size: 13px;
+  color: #5f5f5f;
+  margin: 0 0 8px;
+}
+
+.member-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.member-mini-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+}
+
+.member-mini-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: #111;
+}
+
+.member-mini-meta {
+  font-size: 11px;
+  color: #888;
+  text-align: right;
+}
+
+/* performance comparison */
+.modal-perf {
+  width: min(100%, 1100px);
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+.perf-summary {
+  font-size: 14px;
+  color: #5f5f5f;
+  margin: 0 0 14px;
+  text-align: center;
+}
+
+.perf-summary strong {
+  color: #111;
+}
+
+.perf-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.perf-card {
+  border: 2px solid #e8e8e8;
+  border-radius: 10px;
+  padding: 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.perf-card:hover {
+  border-color: #ccc;
+}
+
+.perf-card-active {
+  border-color: #111;
+}
+
+.perf-card-title {
+  font-size: 12px;
+  color: #888;
+  margin: 0 0 4px;
+}
+
+.perf-card-time {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111;
+  margin: 0;
+}
+
+.perf-speedup {
+  text-align: center;
+  font-size: 14px;
+  color: #5f5f5f;
+  margin: 0 0 14px;
+}
+
+.perf-speedup strong {
+  color: #2e7d32;
+}
+
+.perf-plan {
+  border-top: 1px solid #eee;
+  padding-top: 12px;
+}
+
+.perf-plan-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #737373;
+  margin: 0 0 8px;
+}
+
+.perf-plan-text {
+  background: #f5f5f5;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+  margin: 0;
+  white-space: pre;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+}
+
 .modal-pedigree {
   width: min(100%, 860px);
 }
@@ -1364,5 +1516,13 @@ h2 {
   .tree-meta {
     width: 100%;
     padding-left: 32px;
+  }
+
+  .perf-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-perf {
+    width: min(100%, 96vw);
   }
 }

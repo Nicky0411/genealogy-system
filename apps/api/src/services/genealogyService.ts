@@ -1,4 +1,5 @@
 import { query } from "../db/query";
+import { pool } from "../db/pool";
 
 export interface MemberRow {
   member_id: string;
@@ -32,6 +33,75 @@ export function toMember(row: MemberRow) {
     biography: row.biography,
     depth: row.depth
   };
+}
+
+export async function getSpouseAndChildren(memberId: number) {
+  const memberResult = await query<MemberRow>(
+    `SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id FROM members WHERE member_id = $1`,
+    [memberId]
+  );
+  if (memberResult.rows.length === 0) return null;
+
+  const m = memberResult.rows[0];
+  const [spouseResult, childrenResult] = await Promise.all([
+    m.spouse_id
+      ? query<MemberRow>(
+          `SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id FROM members WHERE member_id = $1`,
+          [m.spouse_id]
+        )
+      : Promise.resolve({ rows: [] }),
+    query<MemberRow>(
+      `SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id FROM members WHERE father_id = $1 OR mother_id = $1 ORDER BY birth_year, member_id`,
+      [memberId]
+    )
+  ]);
+
+  return {
+    member: toMember(m),
+    spouse: spouseResult.rows.length > 0 ? toMember(spouseResult.rows[0]) : null,
+    children: childrenResult.rows.map(toMember)
+  };
+}
+
+export async function getUnmarriedMalesOver50(familyId: number) {
+  const result = await query<MemberRow>(
+    `SELECT member_id, family_id, name, gender, birth_year, death_year, generation, father_id, mother_id, spouse_id
+     FROM members
+     WHERE family_id = $1
+       AND gender = 'M'
+       AND spouse_id IS NULL
+       AND birth_year IS NOT NULL
+       AND (EXTRACT(YEAR FROM CURRENT_DATE) - birth_year) > 50
+     ORDER BY birth_year, member_id`,
+    [familyId]
+  );
+  return result.rows.map(toMember);
+}
+
+export async function getBornBeforeGenAverage(familyId: number) {
+  const result = await query<MemberRow>(
+    `WITH gen_avg AS (
+       SELECT generation, AVG(birth_year)::NUMERIC(10,2) AS avg_birth_year, COUNT(*)::INT AS gen_count
+       FROM members
+       WHERE family_id = $1 AND birth_year IS NOT NULL
+       GROUP BY generation
+     )
+     SELECT m.member_id, m.family_id, m.name, m.gender, m.birth_year, m.death_year, m.generation,
+            m.father_id, m.mother_id, m.spouse_id, m.birthplace, m.biography,
+            g.avg_birth_year, g.gen_count
+     FROM members m
+     JOIN gen_avg g ON m.generation = g.generation
+     WHERE m.family_id = $1
+       AND m.birth_year IS NOT NULL
+       AND m.birth_year < g.avg_birth_year
+     ORDER BY m.generation, m.birth_year, m.member_id`,
+    [familyId]
+  );
+  return result.rows.map((row: MemberRow & { avg_birth_year?: string; gen_count?: number }) => ({
+    ...toMember(row),
+    avgBirthYear: row.avg_birth_year ? Number(row.avg_birth_year) : null,
+    genCount: row.gen_count ?? 0
+  }));
 }
 
 export async function getAncestors(memberId: number, maxDepth?: number) {
@@ -174,5 +244,105 @@ export async function getRelationPath(startMemberId: number, targetMemberId: num
   return {
     depth: fullPathIds.length - 1,
     path: membersResult.rows.map(toMember)
+  };
+}
+
+export async function getGreatGrandchildrenPerformance(memberId: number) {
+  // verify member exists
+  const memberResult = await query<MemberRow>(
+    `SELECT member_id, family_id, name, gender, birth_year, death_year, generation FROM members WHERE member_id = $1`,
+    [memberId]
+  );
+  if (memberResult.rows.length === 0) return null;
+
+  const descQuery = `
+    WITH RECURSIVE descendants AS (
+      SELECT child.*, 1 AS depth
+      FROM members child
+      WHERE child.father_id = $1 OR child.mother_id = $1
+      UNION ALL
+      SELECT child.*, d.depth + 1
+      FROM descendants d
+      JOIN members child ON child.father_id = d.member_id OR child.mother_id = d.member_id
+      WHERE d.depth < 4
+    )
+    SELECT member_id, family_id, name, gender, birth_year, death_year, generation, depth
+    FROM descendants
+    ORDER BY depth, generation, member_id
+  `;
+
+  // with indexes — EXPLAIN ANALYZE to get actual execution plan + timing
+  const withClient = await pool.connect();
+  let withPlanText = "";
+  let withExecMs: number | null = null;
+  let withTimedOut = false;
+  try {
+    await withClient.query("SET LOCAL statement_timeout = '30s'");
+    // 30s timeout for with-index query
+    const withExplainResult = await withClient.query<{ "QUERY PLAN": string }>(
+      `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${descQuery}`,
+      [memberId]
+    );
+    withPlanText = withExplainResult.rows.map((r) => r["QUERY PLAN"]).join("\n");
+    const match = withPlanText.match(/Execution Time:\s*([\d.]+)\s*ms/);
+    withExecMs = match ? Number(match[1]) : null;
+  } catch {
+    withTimedOut = true;
+  } finally {
+    withClient.release();
+  }
+
+  // count actual rows (separate lightweight query)
+  const actualResult = await query<MemberRow>(descQuery, [memberId]);
+
+  // without indexes: EXPLAIN (no ANALYZE) for estimated plan, then try ANALYZE with timeout
+  const client = await pool.connect();
+  let withoutPlanRows: { "QUERY PLAN": string }[] = [];
+  let withoutTimedOut = false;
+  let withoutActualMs: number | null = null;
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL enable_indexscan = off");
+    await client.query("SET LOCAL enable_bitmapscan = off");
+    await client.query("SET LOCAL enable_indexonlyscan = off");
+    // first get estimated plan (no ANALYZE, returns instantly)
+    const estPlanResult = await client.query<{ "QUERY PLAN": string }>(
+      `EXPLAIN (BUFFERS, FORMAT TEXT) ${descQuery}`,
+      [memberId]
+    );
+    withoutPlanRows = estPlanResult.rows;
+    // then try actual execution with timeout
+    try {
+      await client.query("SET LOCAL statement_timeout = '30s'");
+      const actualResult = await client.query<{ "QUERY PLAN": string }>(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${descQuery}`,
+        [memberId]
+      );
+      // extract actual timing from ANALYZE result
+      const actualText = actualResult.rows.map((r) => r["QUERY PLAN"]).join("\n");
+      const actualMatch = actualText.match(/Execution Time:\s*([\d.]+)\s*ms/);
+      withoutActualMs = actualMatch ? Number(actualMatch[1]) : null;
+    } catch {
+      withoutTimedOut = true;
+    }
+    await client.query("ROLLBACK");
+  } finally {
+    client.release();
+  }
+  const withoutPlanText = withoutPlanRows.map((r) => r["QUERY PLAN"]).join("\n");
+
+  return {
+    member: toMember(memberResult.rows[0]),
+    descendantCount: actualResult.rows.length,
+    withIndex: {
+      planText: withPlanText,
+      execMs: withExecMs,
+      timedOut: withTimedOut
+    },
+    withoutIndex: {
+      planText: withoutPlanText,
+      execMs: withoutActualMs,
+      timedOut: withoutTimedOut
+    }
   };
 }
