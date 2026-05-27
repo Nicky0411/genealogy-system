@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.local
+npm-debug.log*
+database/seed/*.csv
+.codex-logs/
+.DS_Store

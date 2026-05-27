@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Genealogy: Dev",
+      "type": "shell",
+      "command": "npm.cmd run dev",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Genealogy: Init Database",
+      "type": "shell",
+      "command": "npm.cmd run db:init",
+      "problemMatcher": []
+    }
+  ]
+}

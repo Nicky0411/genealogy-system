@@ -1,0 +1,25 @@
+{
+  "name": "genealogy-manager",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PostgreSQL based genealogy management system for database coursework.",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "lint": "npm run lint -w apps/api && npm run lint -w apps/web",
+    "db:generate": "node scripts/generate-seed-data.mjs",
+    "db:init": "node scripts/init-db.mjs",
+    "db:schema": "psql \"$DATABASE_URL\" -f database/migrations/001_init.sql",
+    "db:load": "psql \"$DATABASE_URL\" -f database/load_csv.sql"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
